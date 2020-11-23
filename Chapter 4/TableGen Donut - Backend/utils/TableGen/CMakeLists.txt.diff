@@ -1,0 +1,12 @@
+diff --git a/llvm/utils/TableGen/CMakeLists.txt b/llvm/utils/TableGen/CMakeLists.txt
+index 8673a257246..813fda1e88c 100644
+--- a/llvm/utils/TableGen/CMakeLists.txt
++++ b/llvm/utils/TableGen/CMakeLists.txt
+@@ -40,6 +40,7 @@ add_tablegen(llvm-tblgen LLVM
+   PredicateExpander.cpp
+   PseudoLoweringEmitter.cpp
+   RISCVCompressInstEmitter.cpp
++  RecipePrinter.cpp
+   RegisterBankEmitter.cpp
+   RegisterInfoEmitter.cpp
+   SDNodeProperties.cpp
