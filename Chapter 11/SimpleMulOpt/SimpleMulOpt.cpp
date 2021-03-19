@@ -13,6 +13,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <string>
 
 #define DEBUG_TYPE "simple-mul-opt"
 
@@ -51,8 +52,13 @@ SimpleMulOpt::run(Function &F, FunctionAnalysisManager &FAM) {
         // Neither of them is constant
         if (!isa<ConstantInt>(LHS) && !isa<ConstantInt>(RHS)) {
           ORE.emit([&]() {
-            return OptimizationRemarkMissed(DEBUG_TYPE, "NoneConstOperand", &I)
-                   << "None of the operand is constant integer";
+            std::string InstStr;
+            raw_string_ostream SS(InstStr);
+            I.print(SS);
+            return OptimizationRemarkMissed(DEBUG_TYPE, "NoConstOperand", &I)
+                   << "Instruction"
+                   << ore::NV("Inst", SS.str())
+                   << " does not contain any constant operand";
           });
           continue;
         }
@@ -64,7 +70,7 @@ SimpleMulOpt::run(Function &F, FunctionAnalysisManager &FAM) {
           ORE.emit([&]() {
             return OptimizationRemarkMissed(DEBUG_TYPE, "ConstNotPowerOf2", &I)
                    << "Constant operand "
-                   << ore::NV("ConstOp", Const.toString(10, false))
+                   << Const.toString(10, false)
                    << " is not power of two";
           });
           continue;
@@ -81,9 +87,14 @@ SimpleMulOpt::run(Function &F, FunctionAnalysisManager &FAM) {
     auto *Shl = Builder.CreateShl(R.Base, R.ShiftAmt);
 
     ORE.emit([&]() {
+      std::string OrigInstStr, NewInstStr;
+      raw_string_ostream OrigSS(OrigInstStr),
+                         NewSS(NewInstStr);
+      R.I->print(OrigSS);
+      Shl->print(NewSS);
       return OptimizationRemark(DEBUG_TYPE, "Replacement", R.I)
-             << "Replacing " << ore::NV("Original", R.I)
-             << " with " << ore::NV("New", Shl);
+             << "Replacing" << ore::NV("Original", OrigSS.str())
+             << " with" << ore::NV("New", NewSS.str());
     });
 
     R.I->replaceAllUsesWith(Shl);
