@@ -1,0 +1,93 @@
+diff --git a/clang/include/clang/Driver/Options.td b/clang/include/clang/Driver/Options.td
+index a13a83eba6d5..a1bc0a1c9726 100644
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -4118,6 +4118,20 @@ defm devirtualize : BooleanFFlag<"devirtualize">, Group<clang_ignored_gcc_optimi
+ defm devirtualize_speculatively : BooleanFFlag<"devirtualize-speculatively">,
+     Group<clang_ignored_gcc_optimization_f_Group>;
+ 
++def fuse_simple_log : Flag<["-"], "fuse-simple-log">,
++                      Group<f_Group>, Flags<[NoXarchOption]>;
++defm use_debug_simple_log : BooleanFFlag<"use-debug-simple-log">,
++                            Group<f_Group>, Flags<[NoXarchOption]>;
++defm use_error_simple_log : BooleanFFlag<"use-error-simple-log">,
++                            Group<f_Group>, Flags<[NoXarchOption]>;
++defm use_info_simple_log : BooleanFFlag<"use-info-simple-log">,
++                           Group<f_Group>, Flags<[NoXarchOption]>;
++// simple log path
++def fsimple_log_path_EQ : Joined<["-"], "fsimple-log-path=">,
++                          Group<f_Group>, Flags<[NoXarchOption]>;
++def fuse_simple_log_EQ : Joined<["-"], "fuse-simple-log=">,
++                         Group<f_Group>, Flags<[NoXarchOption]>;
++
+ // Generic gfortran options.
+ def A_DASH : Joined<["-"], "A-">, Group<gfortran_Group>;
+ def J : JoinedOrSeparate<["-"], "J">, Flags<[RenderJoined]>, Group<gfortran_Group>;
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index 431f534c38fe..952229868422 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -6362,6 +6362,63 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
+       CmdArgs.push_back("-munsafe-fp-atomics");
+   }
+ 
++  struct SimpleLogOpts {
++    bool Debug = false,
++         Error = false,
++         Info = false;
++
++    static inline SimpleLogOpts All() {
++      return {true, true, true};
++    }
++
++    // if any of the level is enabled
++    inline operator bool() const {
++      return Debug || Error || Info;
++    }
++  };
++  SimpleLogOpts SLG;
++
++  // By default turn on all the simple log features
++  if (Args.hasArg(options::OPT_fuse_simple_log,
++                  options::OPT_fuse_simple_log_EQ)) {
++    SLG = SimpleLogOpts::All();
++  }
++  // Debug simple log
++  SLG.Debug = Args.hasFlag(options::OPT_fuse_debug_simple_log,
++                           options::OPT_fno_use_debug_simple_log,
++                           SLG.Debug);
++  // Error simple log
++  SLG.Error = Args.hasFlag(options::OPT_fuse_error_simple_log,
++                           options::OPT_fno_use_error_simple_log,
++                           SLG.Error);
++  // Info simple log
++  SLG.Info = Args.hasFlag(options::OPT_fuse_info_simple_log,
++                          options::OPT_fno_use_info_simple_log,
++                          SLG.Info);
++  if (SLG) {
++    // include `simple_log.h` implicitly
++    CmdArgs.push_back("-include");
++    // resolve path of `simple_log.h`
++    if (Arg *A = Args.getLastArg(options::OPT_fuse_simple_log_EQ,
++                                 options::OPT_fsimple_log_path_EQ))
++      CmdArgs.push_back(A->getValue());
++    else
++      CmdArgs.push_back("simple_log.h");
++
++    if (SLG.Debug) {
++      CmdArgs.push_back("-D");
++      CmdArgs.push_back("SLG_ENABLE_DEBUG");
++    }
++    if (SLG.Error) {
++      CmdArgs.push_back("-D");
++      CmdArgs.push_back("SLG_ENABLE_ERROR");
++    }
++    if (SLG.Info) {
++      CmdArgs.push_back("-D");
++      CmdArgs.push_back("SLG_ENABLE_INFO");
++    }
++  }
++
+   // For all the host OpenMP offloading compile jobs we need to pass the targets
+   // information using -fopenmp-targets= option.
+   if (JA.isHostOffloading(Action::OFK_OpenMP)) {
