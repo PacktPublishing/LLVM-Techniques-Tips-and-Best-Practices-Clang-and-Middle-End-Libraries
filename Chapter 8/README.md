@@ -1,5 +1,5 @@
 # Note
-The sample code in the subdirectories are presented in the form of patches
+The sample code here is presented in the form of patches
 (since they need to be put inside the LLVM code base). Please apply than to
 the llvm-project repository via `git apply`.
 
