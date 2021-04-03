@@ -1,0 +1,175 @@
+diff --git a/compiler-rt/cmake/config-ix.cmake b/compiler-rt/cmake/config-ix.cmake
+index 47039a312934..39be56498603 100644
+--- a/compiler-rt/cmake/config-ix.cmake
++++ b/compiler-rt/cmake/config-ix.cmake
+@@ -536,6 +536,7 @@ if(APPLE)
+     )
+   set(LSAN_COMMON_SUPPORTED_ARCH ${SANITIZER_COMMON_SUPPORTED_ARCH})
+   set(UBSAN_COMMON_SUPPORTED_ARCH ${SANITIZER_COMMON_SUPPORTED_ARCH})
++  set(LPCSAN_SUPPORTED_ARCH ${SANITIZER_COMMON_SUPPORTED_ARCH})
+   list_intersect(ASAN_SUPPORTED_ARCH
+     ALL_ASAN_SUPPORTED_ARCH
+     SANITIZER_COMMON_SUPPORTED_ARCH)
+@@ -603,6 +604,7 @@ else()
+   filter_available_targets(FUZZER_SUPPORTED_ARCH ${ALL_FUZZER_SUPPORTED_ARCH})
+   filter_available_targets(DFSAN_SUPPORTED_ARCH ${ALL_DFSAN_SUPPORTED_ARCH})
+   filter_available_targets(LSAN_SUPPORTED_ARCH ${ALL_LSAN_SUPPORTED_ARCH})
++  filter_available_targets(LPCSAN_SUPPORTED_ARCH ${SANITIZER_COMMON_SUPPORTED_ARCH})
+   filter_available_targets(MSAN_SUPPORTED_ARCH ${ALL_MSAN_SUPPORTED_ARCH})
+   filter_available_targets(HWASAN_SUPPORTED_ARCH ${ALL_HWASAN_SUPPORTED_ARCH})
+   filter_available_targets(MEMPROF_SUPPORTED_ARCH ${ALL_MEMPROF_SUPPORTED_ARCH})
+@@ -640,7 +642,7 @@ if(COMPILER_RT_SUPPORTED_ARCH)
+ endif()
+ message(STATUS "Compiler-RT supported architectures: ${COMPILER_RT_SUPPORTED_ARCH}")
+ 
+-set(ALL_SANITIZERS asan;dfsan;msan;hwasan;tsan;safestack;cfi;scudo;ubsan_minimal;gwp_asan)
++set(ALL_SANITIZERS asan;dfsan;msan;hwasan;tsan;safestack;cfi;scudo;ubsan_minimal;gwp_asan;lpcsan)
+ set(COMPILER_RT_SANITIZERS_TO_BUILD all CACHE STRING
+     "sanitizers to build if supported on the target (all;${ALL_SANITIZERS})")
+ list_replace(COMPILER_RT_SANITIZERS_TO_BUILD all "${ALL_SANITIZERS}")
+@@ -687,6 +689,12 @@ else()
+   set(COMPILER_RT_HAS_DFSAN FALSE)
+ endif()
+ 
++if (COMPILER_RT_HAS_SANITIZER_COMMON AND OS_NAME MATCHES "Linux")
++  set(COMPILER_RT_HAS_LPCSAN TRUE)
++else()
++  set(COMPILER_RT_HAS_LPCSAN FALSE)
++endif()
++
+ if (COMPILER_RT_HAS_SANITIZER_COMMON AND LSAN_SUPPORTED_ARCH AND
+     OS_NAME MATCHES "Android|Darwin|Linux|NetBSD|Fuchsia")
+   set(COMPILER_RT_HAS_LSAN TRUE)
+diff --git a/compiler-rt/lib/lpcsan/CMakeLists.txt b/compiler-rt/lib/lpcsan/CMakeLists.txt
+new file mode 100644
+index 000000000000..bf68c7a86f75
+--- /dev/null
++++ b/compiler-rt/lib/lpcsan/CMakeLists.txt
+@@ -0,0 +1,38 @@
++include_directories(..)
++
++# Runtime library sources and build flags.
++set(LPCSAN_RTL_SOURCES
++  lpcsan.cpp
++  )
++
++set(LPCSAN_RTL_HEADERS
++  # Put additional headers here if any
++  )
++
++set(LPCSAN_COMMON_CFLAGS ${SANITIZER_COMMON_CFLAGS})
++append_rtti_flag(OFF LPCSAN_COMMON_CFLAGS)
++# Prevent clang from generating libc calls.
++append_list_if(COMPILER_RT_HAS_FFREESTANDING_FLAG -ffreestanding LPCSAN_COMMON_CFLAGS)
++
++# Static runtime library.
++add_compiler_rt_component(lpcsan)
++
++foreach(arch ${LPCSAN_SUPPORTED_ARCH})
++  set(LPCSAN_CFLAGS ${LPCSAN_COMMON_CFLAGS})
++  append_list_if(COMPILER_RT_HAS_FPIE_FLAG -fPIE LPCSAN_CFLAGS)
++  add_compiler_rt_runtime(clang_rt.lpcsan
++    STATIC
++    ARCHS ${arch}
++    SOURCES ${LPCSAN_RTL_SOURCES}
++            $<TARGET_OBJECTS:RTSanitizerCommon.${arch}>
++            $<TARGET_OBJECTS:RTSanitizerCommonLibc.${arch}>
++    ADDITIONAL_HEADERS ${LPCSAN_RTL_HEADERS}
++    CFLAGS ${LPCSAN_CFLAGS}
++    PARENT_TARGET lpcsan)
++  # Export symbols
++  add_sanitizer_rt_symbols(clang_rt.lpcsan
++    ARCHS ${arch}
++    EXTRA lpcsan.syms.extra)
++  add_dependencies(lpcsan
++    clang_rt.lpcsan-${arch}-symbols)
++endforeach()
+diff --git a/compiler-rt/test/lpcsan/CMakeLists.txt b/compiler-rt/test/lpcsan/CMakeLists.txt
+new file mode 100644
+index 000000000000..faeba07adb54
+--- /dev/null
++++ b/compiler-rt/test/lpcsan/CMakeLists.txt
+@@ -0,0 +1,31 @@
++set(LPCSAN_LIT_TESTS_DIR ${CMAKE_CURRENT_SOURCE_DIR})
++
++set(LPCSAN_TESTSUITES)
++
++set(LPCSAN_TEST_ARCH ${LPCSAN_SUPPORTED_ARCH})
++if(APPLE)
++  darwin_filter_host_archs(LPCSAN_SUPPORTED_ARCH LPCSAN_TEST_ARCH)
++endif()
++
++foreach(arch ${LPCSAN_TEST_ARCH})
++  set(LPCSAN_TEST_TARGET_ARCH ${arch})
++  string(TOLOWER "-${arch}" LPCSAN_TEST_CONFIG_SUFFIX)
++  get_test_cc_for_arch(${arch} LPCSAN_TEST_TARGET_CC LPCSAN_TEST_TARGET_CFLAGS)
++  string(TOUPPER ${arch} ARCH_UPPER_CASE)
++  set(CONFIG_NAME ${ARCH_UPPER_CASE}Config)
++
++  configure_lit_site_cfg(
++    ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in
++    ${CMAKE_CURRENT_BINARY_DIR}/${CONFIG_NAME}/lit.site.cfg.py)
++  list(APPEND LPCSAN_TESTSUITES ${CMAKE_CURRENT_BINARY_DIR}/${CONFIG_NAME})
++endforeach()
++
++set(LPCSAN_TEST_DEPS ${SANITIZER_COMMON_LIT_TEST_DEPS})
++if(NOT COMPILER_RT_STANDALONE_BUILD)
++  list(APPEND LPCSAN_TEST_DEPS lpcsan)
++endif()
++
++add_lit_testsuite(check-lpcsan "Running the LoopCounterSanitizer tests"
++  ${LPCSAN_TESTSUITES}
++  DEPENDS ${LPCSAN_TEST_DEPS})
++set_target_properties(check-lpcsan PROPERTIES FOLDER "Compiler-RT Misc")
+diff --git a/compiler-rt/test/lpcsan/lit.cfg.py b/compiler-rt/test/lpcsan/lit.cfg.py
+new file mode 100644
+index 000000000000..6cdf8e45c318
+--- /dev/null
++++ b/compiler-rt/test/lpcsan/lit.cfg.py
+@@ -0,0 +1,28 @@
++# -*- Python -*-
++
++import os
++
++# Setup config name.
++config.name = 'LoopCounterSanitizer' + config.name_suffix
++
++# Setup source root.
++config.test_source_root = os.path.dirname(__file__)
++
++# Setup default compiler flags used with -fsanitize=loop-counter option.
++clang_lpcsan_cflags = (["-fsanitize=loop-counter"] +
++                      [config.target_cflags])
++
++clang_lpcsan_cxxflags = config.cxx_mode_flags + clang_lpcsan_cflags
++
++def build_invocation(compile_flags):
++  return " " + " ".join([config.clang] + compile_flags) + " "
++
++config.substitutions.append( ("%clang_lpcsan ", build_invocation(clang_lpcsan_cflags)) )
++config.substitutions.append( ("%clangxx_lpcsan ", build_invocation(clang_lpcsan_cxxflags)) )
++
++# Default test suffixes.
++config.suffixes = ['.c', '.cpp']
++
++# DataFlowSanitizer tests are currently supported on Linux only.
++if config.host_os not in ['Linux']:
++  config.unsupported = True
+diff --git a/compiler-rt/test/lpcsan/lit.site.cfg.py.in b/compiler-rt/test/lpcsan/lit.site.cfg.py.in
+new file mode 100644
+index 000000000000..8b12a801ad3a
+--- /dev/null
++++ b/compiler-rt/test/lpcsan/lit.site.cfg.py.in
+@@ -0,0 +1,12 @@
++@LIT_SITE_CFG_IN_HEADER@
++
++# Tool-specific config options.
++config.name_suffix = "@LPCSAN_TEST_CONFIG_SUFFIX@"
++config.target_cflags = "@LPCSAN_TEST_TARGET_CFLAGS@"
++config.target_arch = "@LPCSAN_TEST_TARGET_ARCH@"
++
++# Load common config for all compiler-rt lit tests.
++lit_config.load_config(config, "@COMPILER_RT_BINARY_DIR@/test/lit.common.configured")
++
++# Load tool-specific config that would do the real work.
++lit_config.load_config(config, "@LPCSAN_LIT_TESTS_DIR@/lit.cfg.py")

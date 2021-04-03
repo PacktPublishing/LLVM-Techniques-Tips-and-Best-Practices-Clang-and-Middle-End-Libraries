@@ -1,0 +1,75 @@
+diff --git a/clang/include/clang/Basic/Sanitizers.def b/clang/include/clang/Basic/Sanitizers.def
+index 9b8936cc520c..870b25042af0 100644
+--- a/clang/include/clang/Basic/Sanitizers.def
++++ b/clang/include/clang/Basic/Sanitizers.def
+@@ -130,6 +130,9 @@ SANITIZER("safe-stack", SafeStack)
+ // Shadow Call Stack
+ SANITIZER("shadow-call-stack", ShadowCallStack)
+ 
++// Loop Counter Sanitizer
++SANITIZER("loop-counter", LoopCounter)
++
+ // -fsanitize=undefined includes all the sanitizers which have low overhead, no
+ // ABI or address space layout implications, and only catch undefined behavior.
+ SANITIZER_GROUP("undefined", Undefined,
+diff --git a/clang/include/clang/Driver/SanitizerArgs.h b/clang/include/clang/Driver/SanitizerArgs.h
+index 6ba5aac0b702..c67a9b935040 100644
+--- a/clang/include/clang/Driver/SanitizerArgs.h
++++ b/clang/include/clang/Driver/SanitizerArgs.h
+@@ -77,6 +77,7 @@ public:
+            !Sanitizers.has(SanitizerKind::Address) &&
+            !Sanitizers.has(SanitizerKind::HWAddress);
+   }
++  bool needsLpcsanRt() const { return Sanitizers.has(SanitizerKind::LoopCounter); }
+   bool needsFuzzerInterceptors() const;
+   bool needsUbsanRt() const;
+   bool requiresMinimalRuntime() const { return MinimalRuntime; }
+diff --git a/clang/lib/CodeGen/BackendUtil.cpp b/clang/lib/CodeGen/BackendUtil.cpp
+index 37f9067e0b2e..032a9fe60075 100644
+--- a/clang/lib/CodeGen/BackendUtil.cpp
++++ b/clang/lib/CodeGen/BackendUtil.cpp
+@@ -74,6 +74,7 @@
+ #include "llvm/Transforms/Instrumentation/MemorySanitizer.h"
+ #include "llvm/Transforms/Instrumentation/SanitizerCoverage.h"
+ #include "llvm/Transforms/Instrumentation/ThreadSanitizer.h"
++#include "llvm/Transforms/Instrumentation/LoopCounterSanitizer.h"
+ #include "llvm/Transforms/ObjCARC.h"
+ #include "llvm/Transforms/Scalar.h"
+ #include "llvm/Transforms/Scalar/EarlyCSE.h"
+@@ -1156,6 +1157,11 @@ static void addSanitizers(const Triple &TargetTriple,
+     if (LangOpts.Sanitize.has(SanitizerKind::DataFlow)) {
+       MPM.addPass(DataFlowSanitizerPass(LangOpts.NoSanitizeFiles));
+     }
++
++    if (LangOpts.Sanitize.has(SanitizerKind::LoopCounter)) {
++      auto FA = createFunctionToLoopPassAdaptor(LoopCounterSanitizer());
++      MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FA)));
++    }
+   });
+ }
+ 
+diff --git a/clang/lib/Driver/ToolChains/CommonArgs.cpp b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+index 62432b5b7576..20341b3a310e 100644
+--- a/clang/lib/Driver/ToolChains/CommonArgs.cpp
++++ b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+@@ -853,6 +853,8 @@ collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
+     StaticRuntimes.push_back("dfsan");
+   if (SanArgs.needsLsanRt() && SanArgs.linkRuntimes())
+     StaticRuntimes.push_back("lsan");
++  if (SanArgs.needsLpcsanRt() && SanArgs.linkRuntimes())
++    StaticRuntimes.push_back("lpcsan");
+   if (SanArgs.needsMsanRt() && SanArgs.linkRuntimes()) {
+     StaticRuntimes.push_back("msan");
+     if (SanArgs.linkCXXRuntimes())
+diff --git a/clang/lib/Driver/ToolChains/Linux.cpp b/clang/lib/Driver/ToolChains/Linux.cpp
+index 0e8da0fea2a7..c9f99013a399 100644
+--- a/clang/lib/Driver/ToolChains/Linux.cpp
++++ b/clang/lib/Driver/ToolChains/Linux.cpp
+@@ -894,6 +894,7 @@ SanitizerMask Linux::getSupportedSanitizers() const {
+   Res |= SanitizerKind::Memory;
+   Res |= SanitizerKind::Vptr;
+   Res |= SanitizerKind::SafeStack;
++  Res |= SanitizerKind::LoopCounter;
+   if (IsX86_64 || IsMIPS64 || IsAArch64)
+     Res |= SanitizerKind::DataFlow;
+   if (IsX86_64 || IsMIPS64 || IsAArch64 || IsX86 || IsArmArch || IsPowerPC64 ||

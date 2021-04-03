@@ -1,0 +1,41 @@
+diff --git a/compiler-rt/lib/lpcsan/lpcsan.cpp b/compiler-rt/lib/lpcsan/lpcsan.cpp
+new file mode 100644
+index 000000000000..7ffdc96abc4b
+--- /dev/null
++++ b/compiler-rt/lib/lpcsan/lpcsan.cpp
+@@ -0,0 +1,28 @@
++#include "sanitizer_common/sanitizer_common.h"
++#include "sanitizer_common/sanitizer_internal_defs.h"
++
++using namespace __sanitizer;
++
++// NOTE: This sanitizer can NOT be used in multithread application
++// since there is no lock on `CurLoopStart`.
++// It does NOT support nested loops either since the inner loop
++// will overwrite `CurLoopStart`'s value for outer loop
++s32 CurLoopStart = 0;
++
++extern "C" SANITIZER_INTERFACE_ATTRIBUTE
++void __lpcsan_set_loop_start(s32 start){
++  CurLoopStart = start;
++}
++
++extern "C" SANITIZER_INTERFACE_ATTRIBUTE
++void __lpcsan_at_loop_end(s32 end, s32 step){
++  if ((CurLoopStart > end && step >= 0) ||
++      step == 0) {
++    Report("ERROR: Invalid loop range: (%d, %d, %d)\n", CurLoopStart, end, step);
++    Die();
++  }
++
++  s32 trip_count = (end - CurLoopStart) / step;
++  s32 abs_trip_count = trip_count >= 0? trip_count : -trip_count;
++  Report("INFO: Found a loop with trip count %d\n", abs_trip_count);
++}
+diff --git a/compiler-rt/lib/lpcsan/lpcsan.syms.extra b/compiler-rt/lib/lpcsan/lpcsan.syms.extra
+new file mode 100644
+index 000000000000..81b97ccc2eac
+--- /dev/null
++++ b/compiler-rt/lib/lpcsan/lpcsan.syms.extra
+@@ -0,0 +1 @@
++__lpcsan_*

@@ -1,0 +1,22 @@
+diff --git a/clang/runtime/CMakeLists.txt b/clang/runtime/CMakeLists.txt
+index 1716c53b031e..6f6ff72c2e93 100644
+--- a/clang/runtime/CMakeLists.txt
++++ b/clang/runtime/CMakeLists.txt
+@@ -117,7 +117,7 @@ if(LLVM_BUILD_EXTERNAL_COMPILER_RT AND EXISTS ${COMPILER_RT_SRC_ROOT}/)
+                            COMPONENT compiler-rt)
+ 
+   # Add top-level targets that build specific compiler-rt runtimes.
+-  set(COMPILER_RT_RUNTIMES fuzzer asan builtins dfsan lsan msan profile tsan ubsan ubsan-minimal)
++  set(COMPILER_RT_RUNTIMES fuzzer asan builtins dfsan lsan lpcsan msan profile tsan ubsan ubsan-minimal)
+   foreach(runtime ${COMPILER_RT_RUNTIMES})
+     get_ext_project_build_command(build_runtime_cmd ${runtime})
+     add_custom_target(${runtime}
+@@ -134,7 +134,7 @@ if(LLVM_BUILD_EXTERNAL_COMPILER_RT AND EXISTS ${COMPILER_RT_SRC_ROOT}/)
+ 
+     # Add top-level targets for various compiler-rt test suites.
+     set(COMPILER_RT_TEST_SUITES check-fuzzer check-asan check-hwasan check-asan-dynamic check-dfsan
+-      check-lsan check-msan check-sanitizer check-tsan check-ubsan check-ubsan-minimal
++      check-lsan check-lpcsan check-msan check-sanitizer check-tsan check-ubsan check-ubsan-minimal
+       check-profile check-cfi check-cfi-and-supported check-safestack check-gwp_asan)
+     foreach(test_suite ${COMPILER_RT_TEST_SUITES})
+       get_ext_project_build_command(run_test_suite ${test_suite})

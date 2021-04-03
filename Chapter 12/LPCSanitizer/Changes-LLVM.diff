@@ -1,0 +1,160 @@
+diff --git a/llvm/include/llvm/Transforms/Instrumentation/LoopCounterSanitizer.h b/llvm/include/llvm/Transforms/Instrumentation/LoopCounterSanitizer.h
+new file mode 100644
+index 000000000000..75197cb465a9
+--- /dev/null
++++ b/llvm/include/llvm/Transforms/Instrumentation/LoopCounterSanitizer.h
+@@ -0,0 +1,22 @@
++#ifndef LLVM_TRANSFORMS_INSTRUMENTATION_LOOPCOUNTERSANITIZER_H
++#define LLVM_TRANSFORMS_INSTRUMENTATION_LOOPCOUNTERSANITIZER_H
++#include "llvm/Analysis/LoopAnalysisManager.h"
++#include "llvm/IR/DerivedTypes.h"
++#include "llvm/IR/PassManager.h"
++
++namespace llvm {
++class Loop;
++class LPMUpdater;
++
++struct LoopCounterSanitizer : public PassInfoMixin<LoopCounterSanitizer> {
++  PreservedAnalyses run(Loop&, LoopAnalysisManager&,
++                        LoopStandardAnalysisResults&, LPMUpdater&);
++
++private:
++  // Sanitizer functions
++  FunctionCallee LPCSetStartFn, LPCAtEndFn;
++
++  void initializeSanitizerFuncs(Loop&);
++};
++} // end namespace llvm
++#endif
+diff --git a/llvm/lib/Passes/PassBuilder.cpp b/llvm/lib/Passes/PassBuilder.cpp
+index 3a325277e370..d48931bb0dd0 100644
+--- a/llvm/lib/Passes/PassBuilder.cpp
++++ b/llvm/lib/Passes/PassBuilder.cpp
+@@ -135,6 +135,7 @@
+ #include "llvm/Transforms/Instrumentation/PoisonChecking.h"
+ #include "llvm/Transforms/Instrumentation/SanitizerCoverage.h"
+ #include "llvm/Transforms/Instrumentation/ThreadSanitizer.h"
++#include "llvm/Transforms/Instrumentation/LoopCounterSanitizer.h"
+ #include "llvm/Transforms/ObjCARC.h"
+ #include "llvm/Transforms/Scalar/ADCE.h"
+ #include "llvm/Transforms/Scalar/AlignmentFromAssumptions.h"
+diff --git a/llvm/lib/Passes/PassRegistry.def b/llvm/lib/Passes/PassRegistry.def
+index 579143d3c1c8..44b1eadad0cb 100644
+--- a/llvm/lib/Passes/PassRegistry.def
++++ b/llvm/lib/Passes/PassRegistry.def
+@@ -409,6 +409,7 @@ LOOP_PASS("guard-widening", GuardWideningPass())
+ LOOP_PASS("simple-loop-unswitch", SimpleLoopUnswitchPass())
+ LOOP_PASS("loop-reroll", LoopRerollPass())
+ LOOP_PASS("loop-versioning-licm", LoopVersioningLICMPass())
++LOOP_PASS("lpcsan", LoopCounterSanitizer())
+ #undef LOOP_PASS
+ 
+ #ifndef LOOP_PASS_WITH_PARAMS
+diff --git a/llvm/lib/Transforms/Instrumentation/CMakeLists.txt b/llvm/lib/Transforms/Instrumentation/CMakeLists.txt
+index 3b29c3df6429..dc1400350ccb 100644
+--- a/llvm/lib/Transforms/Instrumentation/CMakeLists.txt
++++ b/llvm/lib/Transforms/Instrumentation/CMakeLists.txt
+@@ -18,6 +18,7 @@ add_llvm_component_library(LLVMInstrumentation
+   ValueProfileCollector.cpp
+   ThreadSanitizer.cpp
+   HWAddressSanitizer.cpp
++  LoopCounterSanitizer.cpp
+ 
+   ADDITIONAL_HEADER_DIRS
+   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms
+diff --git a/llvm/lib/Transforms/Instrumentation/LoopCounterSanitizer.cpp b/llvm/lib/Transforms/Instrumentation/LoopCounterSanitizer.cpp
+new file mode 100644
+index 000000000000..909e2bf14817
+--- /dev/null
++++ b/llvm/lib/Transforms/Instrumentation/LoopCounterSanitizer.cpp
+@@ -0,0 +1,90 @@
++#include "llvm/Analysis/LoopInfo.h"
++#include "llvm/IR/IRBuilder.h"
++#include "llvm/IR/Function.h"
++#include "llvm/IR/Module.h"
++#include "llvm/Transforms/Instrumentation/LoopCounterSanitizer.h"
++#include "llvm/Transforms/Scalar/LoopPassManager.h"
++#include "llvm/Support/raw_ostream.h"
++
++using namespace llvm;
++
++PreservedAnalyses
++LoopCounterSanitizer::run(Loop &LP, LoopAnalysisManager &LAM,
++                          LoopStandardAnalysisResults &LSR, LPMUpdater &U) {
++  initializeSanitizerFuncs(LP);
++
++  auto &SE = LSR.SE;
++  auto PA = PreservedAnalyses::all();
++
++  using LoopBounds = typename Loop::LoopBounds;
++  auto MaybeLB = LP.getBounds(SE);
++  if (!MaybeLB) {
++    errs() << "WARNING: Failed to get loop bounds\n";
++    return PA;
++  }
++  LoopBounds &LB = *MaybeLB;
++
++  BasicBlock *ExitBlock = LP.getExitBlock();
++  if (!ExitBlock) {
++    errs() << "WARNING: Can only handle single exit loop\n";
++    return PA;
++  }
++
++  Value *StartVal = &LB.getInitialIVValue(),
++        *EndVal = &LB.getFinalIVValue(),
++        *StepVal = LB.getStepValue();
++  if (!StartVal->getType()->isIntegerTy() ||
++      !EndVal->getType()->isIntegerTy() ||
++      !StepVal->getType()->isIntegerTy())
++    return PA;
++
++
++  // Start value
++  {
++    // This value will always be available at header block
++    // so insert the call at the end of header
++    BasicBlock *Header = LP.getHeader();
++    Instruction *LastInst = Header->getTerminator();
++    IRBuilder<> Builder(LastInst);
++    Type *ArgTy = LPCSetStartFn.getFunctionType()->getParamType(0);
++
++    if (StartVal->getType() != ArgTy) {
++      // cast to argument type first
++      StartVal = Builder.CreateIntCast(StartVal, ArgTy, true);
++    }
++    Builder.CreateCall(LPCSetStartFn, {StartVal});
++  }
++
++  // End and step values
++  {
++    // These two values will always be available at exit block
++    // so insert the call at the beginning of it
++    Instruction *FirstInst = ExitBlock->getFirstNonPHI();
++    IRBuilder<> Builder(FirstInst);
++    FunctionType *LPCAtEndTy = LPCAtEndFn.getFunctionType();
++    Type *EndArgTy = LPCAtEndTy->getParamType(0),
++         *StepArgTy = LPCAtEndTy->getParamType(1);
++
++    if (EndVal->getType() != EndArgTy)
++      EndVal = Builder.CreateIntCast(EndVal, EndArgTy, true);
++    if (StepVal->getType() != StepArgTy)
++      StepVal = Builder.CreateIntCast(StepVal, StepArgTy, true);
++
++    Builder.CreateCall(LPCAtEndFn, {EndVal, StepVal});
++  }
++
++  return PA;
++}
++
++void LoopCounterSanitizer::initializeSanitizerFuncs(Loop &LP) {
++  auto& M = *LP.getHeader()->getModule();
++  auto& Ctx = M.getContext();
++
++  Type *VoidTy = Type::getVoidTy(Ctx);
++  Type *ArgTy = Type::getInt32Ty(Ctx);
++
++  LPCSetStartFn = M.getOrInsertFunction("__lpcsan_set_loop_start",
++                                      VoidTy, ArgTy);
++  LPCAtEndFn = M.getOrInsertFunction("__lpcsan_at_loop_end",
++                                     VoidTy, ArgTy, ArgTy);
++}
