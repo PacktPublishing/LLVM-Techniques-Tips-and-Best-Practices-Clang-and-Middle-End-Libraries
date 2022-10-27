@@ -56,3 +56,7 @@ We also provide a PDF file that has color images of the screenshots/diagrams use
 ## Get to Know the Author
 **Min-Yih "Min" Hsu**
 is a Ph.D. candidate in computer science at the University of California, Irvine. His research focuses on compiler engineering, code optimization, advanced hardware architectures, and system security. He has been an active member of the LLVM community since 2015 and has contributed numerous patches upstream. Min also dedicates his time to advocating LLVM and compiler engineering through various avenues, such as writing blog posts and giving talks at conferences. In his spare time, Min likes to explore a variety of different coffee beans and ways of brewing.
+### Download a free PDF
+
+ <i>If you have already purchased a print or Kindle version of this book, you can get a DRM-free PDF version at no cost.<br>Simply click on the link to claim your free PDF.</i>
+<p align="center"> <a href="https://packt.link/free-ebook/9781838824952">https://packt.link/free-ebook/9781838824952 </a> </p>
